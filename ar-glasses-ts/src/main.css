@@ -1,1 +1,7 @@
 @import 'tailwindcss';
+
+@theme {
+  --color-ocean-900: #104378;
+  --color-sky-400: #b2dff8;
+  --color-sky-50: #E3F6FD;
+}
