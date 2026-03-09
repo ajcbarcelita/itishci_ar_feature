@@ -163,9 +163,9 @@ function renderLoop() {
             const landmarks = results.faceLandmarks[0];
 
             // Core facial tracking points
-            const nose = landmarks[168];
-            const leftTemple = landmarks[234];
-            const rightTemple = landmarks[454];
+            const nose = landmarks?.[168];
+            const leftTemple = landmarks?.[234];
+            const rightTemple = landmarks?.[454];
 
             // Type guard against missing landmark data
             if (!nose || !leftTemple || !rightTemple) return;

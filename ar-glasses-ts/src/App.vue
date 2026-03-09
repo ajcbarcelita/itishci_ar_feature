@@ -8,7 +8,7 @@ import Footer from './components/Footer.vue';
     <div class="min-h-screen flex flex-col bg-neutral-50 text-white font-sans">
         <Navbar />
 
-        <main class="flex-grow flex items-center justify-center p-4 w-full">
+        <main class="grow flex items-center justify-center p-4 w-full">
             <ARCamera />
         </main>
 
