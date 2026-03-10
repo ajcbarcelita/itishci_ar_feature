@@ -16,7 +16,9 @@
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "^0.10.32",
+    "@primeuix/themes": "^2.0.3",
     "@tailwindcss/vite": "^4.2.1",
+    "primevue": "^4.5.4",
     "tailwindcss": "^4.2.1",
     "three": "^0.183.2",
     "vue": "^3.5.29"

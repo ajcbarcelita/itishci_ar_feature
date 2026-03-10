@@ -1,15 +1,21 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue';
+import { ref, watch, onMounted, onUnmounted } from 'vue';
 import { FaceLandmarker, FilesetResolver } from '@mediapipe/tasks-vision';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+/**
+ * COMPONENT PROPS
+ * @prop mode - Switch between 'glasses' and 'contacts' UI/Logic branches.
+ */
+const props = defineProps<{
+    mode: string
+}>();
 
 // --- 1. DOM Refs & UI State ---
 const videoEl = ref<HTMLVideoElement | null>(null);
 const canvasEl = ref<HTMLCanvasElement | null>(null);
 const isLoading = ref(true);
-
-// Dynamically binds to the webcam's native aspect ratio to prevent coordinate drift
 const containerStyle = ref({ aspectRatio: '16 / 9' });
 
 // --- 2. 3D & ML Pipeline Variables ---
@@ -20,18 +26,20 @@ let renderer: THREE.WebGLRenderer;
 let glassesMesh: THREE.Group | null = null;
 let animationFrameId: number;
 
-// Target object used for Linear Interpolation (Lerp) to smooth out ML tracking jitter
+/** * targetObj: An invisible 3D anchor used to hold raw ML coordinates.
+ * We 'Lerp' the visible mesh toward this object to smooth out tracking jitter.
+ */
 const targetObj = new THREE.Object3D();
 
 // --- 3. Lifecycle Hooks ---
+
 onMounted(async () => {
     try {
         await initWebcam();
         await initMediaPipe();
         initThreeJS();
 
-        // Initial sync of canvas size, then listen for window changes
-        handleResize();
+        handleResize(); // Sync canvas size with video feed
         window.addEventListener('resize', handleResize);
 
         await loadGlassesModel();
@@ -46,6 +54,7 @@ onUnmounted(() => {
     cancelAnimationFrame(animationFrameId);
     window.removeEventListener('resize', handleResize);
 
+    // Stop the webcam stream to save power/privacy
     if (videoEl.value && videoEl.value.srcObject) {
         const stream = videoEl.value.srcObject as MediaStream;
         stream.getTracks().forEach((track) => track.stop());
@@ -55,7 +64,20 @@ onUnmounted(() => {
     if (faceLandmarker) faceLandmarker.close();
 });
 
+/** * UI WATCHER: Manages visibility of 3D assets when switching tabs.
+ */
+watch(() => props.mode, (newMode) => {
+    if (newMode === 'contacts') {
+        if (glassesMesh) glassesMesh.visible = false;
+    } else if (newMode === 'glasses') {
+        if (glassesMesh) glassesMesh.visible = true;
+    }
+});
+
 // --- 4. Initialization Functions ---
+
+/** * Requests camera access and sets up the mirrored user feed.
+ */
 async function initWebcam() {
     if (!videoEl.value) throw new Error('Video element not found');
 
@@ -66,17 +88,17 @@ async function initWebcam() {
 
     return new Promise<void>((resolve) => {
         videoEl.value!.onloadedmetadata = () => {
-            // Force the UI wrapper to match the raw video resolution perfectly
             const w = videoEl.value!.videoWidth;
             const h = videoEl.value!.videoHeight;
             containerStyle.value.aspectRatio = `${w} / ${h}`;
-
             videoEl.value!.play();
             resolve();
         };
     });
 }
 
+/** * Initializes the MediaPipe Face Landmarker with GPU acceleration.
+ */
 async function initMediaPipe() {
     const vision = await FilesetResolver.forVisionTasks(
         'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm',
@@ -86,12 +108,14 @@ async function initMediaPipe() {
             modelAssetPath: '/models/face_landmarker.task',
             delegate: 'GPU',
         },
-        outputFaceBlendshapes: false,
+        outputFaceBlendshapes: false, // Turned off to prevent errors with older task models
         runningMode: 'VIDEO',
         numFaces: 1,
     });
 }
 
+/** * Bootstraps the Three.js scene and lighting.
+ */
 function initThreeJS() {
     if (!canvasEl.value || !videoEl.value) return;
     const width = videoEl.value.videoWidth;
@@ -99,9 +123,8 @@ function initThreeJS() {
 
     scene = new THREE.Scene();
 
-    // Setup camera frustum to match the video feed
     camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 1000);
-    camera.position.z = 2;
+    camera.position.z = 2; // Offset camera to view the face at Z=0
 
     renderer = new THREE.WebGLRenderer({ canvas: canvasEl.value, alpha: true, antialias: true });
     renderer.setSize(width, height);
@@ -114,27 +137,26 @@ function initThreeJS() {
     scene.add(directionalLight);
 }
 
+/** * Loads the glasses GLB and injects an 'Occlusion Head'.
+ * The occlusion head is an invisible sphere that hides the glasses' arms 
+ * when they pass behind your real ears.
+ */
 async function loadGlassesModel() {
     const loader = new GLTFLoader();
     return new Promise<void>((resolve, reject) => {
         loader.load(
-            '/models/test_glasses.glb',
+            '/classic_nerd_black.glb',
             (gltf) => {
                 glassesMesh = gltf.scene;
 
-                // --- Occlusion Mask Setup ---
-                // Generates an invisible depth-mask to hide the glasses arms behind the wearer's ears
+                // Create the invisible depth-mask head
                 const headGeometry = new THREE.SphereGeometry(0.08, 32, 32);
                 const occlusionMaterial = new THREE.MeshBasicMaterial({ colorWrite: false });
                 const occlusionHead = new THREE.Mesh(headGeometry, occlusionMaterial);
 
-                // Shape the mask to roughly match a human skull (narrower sides, deeper back)
                 occlusionHead.scale.set(0.9, 1.4, 1.4);
-                // Recess the mask into the Z-plane so it does not clip the front lenses
                 occlusionHead.position.set(0, 0, -0.11);
-
-                // Render order -1 ensures the invisible mask is drawn before the glasses
-                occlusionHead.renderOrder = -1;
+                occlusionHead.renderOrder = -1; // Render first to 'cut' the depth buffer
 
                 glassesMesh.add(occlusionHead);
                 scene.add(glassesMesh);
@@ -147,68 +169,85 @@ async function loadGlassesModel() {
 }
 
 // --- 5. Render & Tracking Loop ---
+
 let lastVideoTime = -1;
 
 function renderLoop() {
     animationFrameId = requestAnimationFrame(renderLoop);
 
-    // Only process ML inference if the video frame has advanced
+    // Only run ML if the camera has produced a new frame
     if (videoEl.value && videoEl.value.currentTime !== lastVideoTime) {
         lastVideoTime = videoEl.value.currentTime;
 
         const startTimeMs = performance.now();
         const results = faceLandmarker.detectForVideo(videoEl.value, startTimeMs);
 
-        if (results.faceLandmarks && results.faceLandmarks.length > 0 && glassesMesh) {
+        if (results.faceLandmarks && results.faceLandmarks.length > 0) {
             const landmarks = results.faceLandmarks[0];
 
-            // Core facial tracking points
-            const nose = landmarks?.[168];
-            const leftTemple = landmarks?.[234];
-            const rightTemple = landmarks?.[454];
+            // --- BRANCH A: GLASSES TRACKING ---
+            if (props.mode === 'glasses' && glassesMesh) {
+                // Primary tracking points (MediaPipe index mapping)
+                const nose = landmarks?.[168];     // Mid-nose bridge
+                const leftTemple = landmarks?.[234]; // Left outer face
+                const rightTemple = landmarks?.[454]; // Right outer face
 
-            // Type guard against missing landmark data
-            if (!nose || !leftTemple || !rightTemple) return;
+                if (!nose || !leftTemple || !rightTemple) return;
 
-            // Calculate exact physical bounds of the camera frustum at Z=0
-            const dist = camera.position.z;
-            const vFov = camera.fov * (Math.PI / 180);
-            const visibleHeight = 2 * Math.tan(vFov / 2) * dist;
-            const visibleWidth = visibleHeight * camera.aspect;
+                // Frustum Math: Convert 0-1 normalized coordinates to 3D world space
+                const dist = camera.position.z;
+                const vFov = camera.fov * (Math.PI / 180);
+                const visibleHeight = 2 * Math.tan(vFov / 2) * dist;
+                const visibleWidth = visibleHeight * camera.aspect;
 
-            // --- Calculate Position ---
-            // Map normalized MediaPipe coordinates [0..1] to the 3D world bounds
-            const xWorld = (nose.x - 0.5) * visibleWidth;
-            const yWorld = -(nose.y - 0.5) * visibleHeight;
-            targetObj.position.set(xWorld, yWorld, 0);
+                // Map nose bridge to X/Y world coords
+                const xWorld = (nose.x - 0.5) * visibleWidth;
+                const yWorld = -(nose.y - 0.5) * visibleHeight;
+                targetObj.position.set(xWorld, yWorld, 0);
 
-            // --- Calculate Scale ---
-            const faceWidthNormalized = leftTemple.x - rightTemple.x;
-            const faceWidthWorld = faceWidthNormalized * visibleWidth;
+                // Calculate distances for Scale & Rotation
+                const dx = leftTemple.x - rightTemple.x;
+                const dy = leftTemple.y - rightTemple.y;
+                const dz = leftTemple.z - rightTemple.z;
 
-            // Divide by native GLB width (0.15m) and multiply by 1.15 for ergonomic fit
-            const exactScale = (faceWidthWorld / 0.15) * 1.15;
-            targetObj.scale.set(exactScale, exactScale, exactScale);
+                // --- SCALE LOGIC ---
+                // Math.hypot gets the absolute distance between temples
+                const faceWidthNormalized = Math.hypot(dx, dy);
+                const faceWidthWorld = faceWidthNormalized * visibleWidth;
 
-            // --- Calculate Rotation ---
-            const dx = leftTemple.x - rightTemple.x;
-            const dy = leftTemple.y - rightTemple.y;
-            const dz = leftTemple.z - rightTemple.z;
+                // 0.15 is the standard width of the GLB model in meters
+                const exactScale = (faceWidthWorld / 0.15) * 1.15;
+                targetObj.scale.set(exactScale, exactScale, exactScale);
 
-            const rollAngle = Math.atan2(dy, dx);
-            const yawAngle = Math.atan2(dz, dx);
+                // --- ROTATION LOGIC ---
+                // safeDx/Dy: We normalize for Mirror Mode to prevent the glasses 
+                // from flipping upside down when the face mirrors.
+                const safeDx = Math.abs(dx);
+                const safeDy = dx < 0 ? -dy : dy;
 
-            targetObj.rotation.z = rollAngle;
-            targetObj.rotation.y = yawAngle;
+                // DOUBLE-NEGATIVE MASTERSTROKE: Inverting both Z and Y rotation 
+                // forces the glasses to match the mirrored webcam feed perfectly.
+                const rollAngle = -Math.atan2(safeDy, safeDx); // Tilt (Roll)
+                const yawAngle = -Math.atan2(dz, safeDx);    // Pan (Yaw)
+
+                targetObj.rotation.z = rollAngle;
+                targetObj.rotation.y = yawAngle;
+            } 
+            
+            // --- BRANCH B: CONTACTS TRACKING (WIP) ---
+            else if (props.mode === 'contacts') {
+                // (TODO) Ready for Iris tracking points 473 and 468
+            }
         } else if (glassesMesh) {
-            // Hide glasses off-screen if tracking is lost
+            // Hide glasses if no face is in view
             targetObj.position.set(0, 9999, 0);
         }
     }
 
-    // --- Lerp Smoothing ---
-    // Glides the 3D mesh 20% toward the mathematical target per frame to eliminate jitter
-    if (glassesMesh) {
+    /** * LERP (Linear Interpolation) 
+     * Glide the mesh 20% toward the target object every frame for smoothness.
+     */
+    if (glassesMesh && props.mode === 'glasses') {
         glassesMesh.position.lerp(targetObj.position, 0.2);
         glassesMesh.quaternion.slerp(targetObj.quaternion, 0.2);
         glassesMesh.scale.lerp(targetObj.scale, 0.2);
@@ -219,7 +258,8 @@ function renderLoop() {
     }
 }
 
-// --- 6. Event Handlers ---
+/** * Syncs the WebGL viewport with the container size on browser window resize.
+ */
 function handleResize() {
     if (!canvasEl.value || !camera || !renderer) return;
     const container = canvasEl.value.parentElement;
@@ -237,8 +277,17 @@ function handleResize() {
 <template>
     <div
         :style="containerStyle"
-        class="relative w-full max-w-4xl mx-auto bg-neutral-900 overflow-hidden shadow-lg"
+        class="relative w-full max-w-4xl mx-auto bg-neutral-900 overflow-hidden shadow-lg rounded-xl"
     >
+        <div 
+            v-if="props.mode === 'contacts'"
+            class="absolute inset-0 z-20 flex items-center justify-center bg-black/60 backdrop-blur-md"
+        >
+            <h2 class="text-3xl font-bold text-white tracking-widest uppercase shadow-black drop-shadow-lg">
+                Work in Progress
+            </h2>
+        </div>
+
         <video
             ref="videoEl"
             class="absolute inset-0 w-full h-full z-0"
@@ -247,6 +296,6 @@ function handleResize() {
             muted
         ></video>
 
-        <canvas ref="canvasEl" class="absolute inset-0 w-full h-full z-10"></canvas>
+        <canvas ref="canvasEl" class="absolute inset-0 w-full h-full z-10 pointer-events-none"></canvas>
     </div>
 </template>
