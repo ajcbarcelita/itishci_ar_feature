@@ -9,7 +9,8 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
  * @prop mode - Switch between 'glasses' and 'contacts' UI/Logic branches.
  */
 const props = defineProps<{
-    mode: string
+    mode: string,
+    model?: string,
 }>();
 
 // --- 1. DOM Refs & UI State ---
@@ -42,7 +43,7 @@ onMounted(async () => {
         handleResize(); // Sync canvas size with video feed
         window.addEventListener('resize', handleResize);
 
-        await loadGlassesModel();
+        await loadGlassesModel(props.model ?? 'classic_nerd_black');
         isLoading.value = false;
         renderLoop();
     } catch (error) {
@@ -71,6 +72,17 @@ watch(() => props.mode, (newMode) => {
         if (glassesMesh) glassesMesh.visible = false;
     } else if (newMode === 'glasses') {
         if (glassesMesh) glassesMesh.visible = true;
+    }
+});
+
+// Watch for model changes and reload the GLB when requested
+watch(() => props.model, async (newModel, oldModel) => {
+    if (newModel && newModel !== oldModel) {
+        try {
+            await loadGlassesModel(newModel);
+        } catch (err) {
+            console.error('Failed to load model:', newModel, err);
+        }
     }
 });
 
@@ -141,11 +153,39 @@ function initThreeJS() {
  * The occlusion head is an invisible sphere that hides the glasses' arms 
  * when they pass behind your real ears.
  */
-async function loadGlassesModel() {
+async function unloadGlassesModel() {
+    if (!glassesMesh || !scene) return;
+    scene.remove(glassesMesh);
+
+    glassesMesh.traverse((child: any) => {
+        if (child.isMesh) {
+            if (child.geometry) child.geometry.dispose();
+            if (child.material) {
+                if (Array.isArray(child.material)) {
+                    child.material.forEach((m: any) => m.dispose && m.dispose());
+                } else if (child.material.dispose) {
+                    child.material.dispose();
+                }
+            }
+        }
+    });
+
+    glassesMesh = null;
+}
+
+async function loadGlassesModel(modelName: string) {
+    // If another model is loaded, remove it first
+    await unloadGlassesModel();
+
     const loader = new GLTFLoader();
+    
+    let path = modelName;
+    if (!path.startsWith('/')) path = `/${path}`;
+    if (!path.endsWith('.glb')) path = `${path}.glb`;
+
     return new Promise<void>((resolve, reject) => {
         loader.load(
-            '/classic_nerd_black.glb',
+            path,
             (gltf) => {
                 glassesMesh = gltf.scene;
 
@@ -163,7 +203,10 @@ async function loadGlassesModel() {
                 resolve();
             },
             undefined,
-            reject,
+            (err) => {
+                console.error('GLTFLoader error for', path, err);
+                reject(err);
+            },
         );
     });
 }

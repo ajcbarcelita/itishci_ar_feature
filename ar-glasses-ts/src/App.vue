@@ -11,6 +11,11 @@ const arModes = ref([
     { name: 'Contacts', value: 'contacts' }
 ]);
 const currentMode = ref('glasses');
+const models = ref([
+    { name: 'EO Eyewear Dell', value: 'classic_nerd_black' },
+    { name: 'EO Rect Metal (Silver)', value: 'rect_metal_silver' },
+]);
+const selectedModel = ref('classic_nerd_black');
 </script>
 
 <template>
@@ -31,7 +36,18 @@ const currentMode = ref('glasses');
                 />
             </div>
 
-            <ARCamera :mode="currentMode" />
+            <div class="mb-6 z-20">
+                <SelectButton
+                    v-model="selectedModel"
+                    :options="models"
+                    optionLabel="name"
+                    optionValue="value"
+                    :allowEmpty="false"
+                    class="shadow-md bg-white rounded-full p-1"
+                />
+            </div>
+
+            <ARCamera :mode="currentMode" :model="selectedModel" />
             
         </main>
 
