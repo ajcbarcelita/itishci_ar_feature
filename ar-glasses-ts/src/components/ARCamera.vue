@@ -6,7 +6,6 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 /**
  * COMPONENT PROPS
- * @prop mode - Switch between 'glasses' and 'contacts' UI/Logic branches.
  */
 const props = defineProps<{
     mode: string,
@@ -27,9 +26,7 @@ let renderer: THREE.WebGLRenderer;
 let glassesMesh: THREE.Group | null = null;
 let animationFrameId: number;
 
-/** * targetObj: An invisible 3D anchor used to hold raw ML coordinates.
- * We 'Lerp' the visible mesh toward this object to smooth out tracking jitter.
- */
+/** targetObj: An invisible 3D anchor used to hold raw ML coordinates */
 const targetObj = new THREE.Object3D();
 
 // --- 3. Lifecycle Hooks ---
@@ -40,7 +37,7 @@ onMounted(async () => {
         await initMediaPipe();
         initThreeJS();
 
-        handleResize(); // Sync canvas size with video feed
+        handleResize();
         window.addEventListener('resize', handleResize);
 
         await loadGlassesModel(props.model ?? 'classic_nerd_black');
@@ -55,7 +52,6 @@ onUnmounted(() => {
     cancelAnimationFrame(animationFrameId);
     window.removeEventListener('resize', handleResize);
 
-    // Stop the webcam stream to save power/privacy
     if (videoEl.value && videoEl.value.srcObject) {
         const stream = videoEl.value.srcObject as MediaStream;
         stream.getTracks().forEach((track) => track.stop());
@@ -65,17 +61,10 @@ onUnmounted(() => {
     if (faceLandmarker) faceLandmarker.close();
 });
 
-/** * UI WATCHER: Manages visibility of 3D assets when switching tabs.
- */
-watch(() => props.mode, (newMode) => {
-    if (newMode === 'contacts') {
-        if (glassesMesh) glassesMesh.visible = false;
-    } else if (newMode === 'glasses') {
-        if (glassesMesh) glassesMesh.visible = true;
-    }
+watch(() => props.mode, () => {
+    if (glassesMesh) glassesMesh.visible = true;
 });
 
-// Watch for model changes and reload the GLB when requested
 watch(() => props.model, async (newModel, oldModel) => {
     if (newModel && newModel !== oldModel) {
         try {
@@ -88,8 +77,6 @@ watch(() => props.model, async (newModel, oldModel) => {
 
 // --- 4. Initialization Functions ---
 
-/** * Requests camera access and sets up the mirrored user feed.
- */
 async function initWebcam() {
     if (!videoEl.value) throw new Error('Video element not found');
 
@@ -109,8 +96,6 @@ async function initWebcam() {
     });
 }
 
-/** * Initializes the MediaPipe Face Landmarker with GPU acceleration.
- */
 async function initMediaPipe() {
     const vision = await FilesetResolver.forVisionTasks(
         'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm',
@@ -120,23 +105,20 @@ async function initMediaPipe() {
             modelAssetPath: '/models/face_landmarker.task',
             delegate: 'GPU',
         },
-        outputFaceBlendshapes: false, // Turned off to prevent errors with older task models
+        outputFaceBlendshapes: false,
         runningMode: 'VIDEO',
         numFaces: 1,
     });
 }
 
-/** * Bootstraps the Three.js scene and lighting.
- */
 function initThreeJS() {
     if (!canvasEl.value || !videoEl.value) return;
     const width = videoEl.value.videoWidth;
     const height = videoEl.value.videoHeight;
 
     scene = new THREE.Scene();
-
     camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 1000);
-    camera.position.z = 2; // Offset camera to view the face at Z=0
+    camera.position.z = 2;
 
     renderer = new THREE.WebGLRenderer({ canvas: canvasEl.value, alpha: true, antialias: true });
     renderer.setSize(width, height);
@@ -149,10 +131,6 @@ function initThreeJS() {
     scene.add(directionalLight);
 }
 
-/** * Loads the glasses GLB and injects an 'Occlusion Head'.
- * The occlusion head is an invisible sphere that hides the glasses' arms 
- * when they pass behind your real ears.
- */
 async function unloadGlassesModel() {
     if (!glassesMesh || !scene) return;
     scene.remove(glassesMesh);
@@ -164,6 +142,7 @@ async function unloadGlassesModel() {
                 if (Array.isArray(child.material)) {
                     child.material.forEach((m: any) => m.dispose && m.dispose());
                 } else if (child.material.dispose) {
+                    if (child.material.map && child.material.map.dispose) child.material.map.dispose();
                     child.material.dispose();
                 }
             }
@@ -174,29 +153,73 @@ async function unloadGlassesModel() {
 }
 
 async function loadGlassesModel(modelName: string) {
-    // If another model is loaded, remove it first
     await unloadGlassesModel();
 
-    const loader = new GLTFLoader();
-    
     let path = modelName;
     if (!path.startsWith('/')) path = `/${path}`;
-    if (!path.endsWith('.glb')) path = `${path}.glb`;
+
+    const isImage = path.toLowerCase().endsWith('.png') || path.toLowerCase().endsWith('.jpg') || path.toLowerCase().endsWith('.jpeg');
+
+    if (isImage) {
+        return new Promise<void>((resolve, reject) => {
+            const texLoader = new THREE.TextureLoader();
+            texLoader.load(
+                path,
+                (texture) => {
+                    (texture as any).encoding = (THREE as any).sRGBEncoding;
+
+                    const group = new THREE.Group();
+
+                    const isContacts = props.mode === 'contacts';
+                    
+                    // Make contact planes larger for better coverage
+                    const planeW = isContacts ? 0.06 : 0.35;
+                    const planeH = isContacts ? 0.06 : 0.35;
+                    const geom = new THREE.PlaneGeometry(planeW, planeH);
+
+                    const matL = new THREE.MeshBasicMaterial({ map: texture, transparent: true });
+                    const left = new THREE.Mesh(geom, matL);
+                    left.position.set(isContacts ? 0 : -0.045, 0, 0); // Adjusted spacing for larger lenses
+
+                    const matR = new THREE.MeshBasicMaterial({ map: texture, transparent: true });
+                    const right = new THREE.Mesh(geom, matR);
+                    right.position.set(isContacts ? 0 : 0.045, 0, 0); // Adjusted spacing for larger lenses
+
+                    group.add(left);
+                    group.add(right);
+
+                    (group as any).userData = { isImageLenses: true, leftMesh: left, rightMesh: right };
+
+                    glassesMesh = group;
+                    scene.add(group);
+                    resolve();
+                },
+                undefined,
+                (err) => {
+                    console.error('TextureLoader error for', path, err);
+                    reject(err);
+                },
+            );
+        });
+    }
+
+    const loader = new GLTFLoader();
+    let glbPath = path;
+    if (!glbPath.endsWith('.glb')) glbPath = `${glbPath}.glb`;
 
     return new Promise<void>((resolve, reject) => {
         loader.load(
-            path,
+            glbPath,
             (gltf) => {
                 glassesMesh = gltf.scene;
 
-                // Create the invisible depth-mask head
                 const headGeometry = new THREE.SphereGeometry(0.08, 32, 32);
                 const occlusionMaterial = new THREE.MeshBasicMaterial({ colorWrite: false });
                 const occlusionHead = new THREE.Mesh(headGeometry, occlusionMaterial);
 
                 occlusionHead.scale.set(0.9, 1.4, 1.4);
                 occlusionHead.position.set(0, 0, -0.11);
-                occlusionHead.renderOrder = -1; // Render first to 'cut' the depth buffer
+                occlusionHead.renderOrder = -1;
 
                 glassesMesh.add(occlusionHead);
                 scene.add(glassesMesh);
@@ -204,7 +227,7 @@ async function loadGlassesModel(modelName: string) {
             },
             undefined,
             (err) => {
-                console.error('GLTFLoader error for', path, err);
+                console.error('GLTFLoader error for', glbPath, err);
                 reject(err);
             },
         );
@@ -218,7 +241,6 @@ let lastVideoTime = -1;
 function renderLoop() {
     animationFrameId = requestAnimationFrame(renderLoop);
 
-    // Only run ML if the camera has produced a new frame
     if (videoEl.value && videoEl.value.currentTime !== lastVideoTime) {
         lastVideoTime = videoEl.value.currentTime;
 
@@ -228,69 +250,73 @@ function renderLoop() {
         if (results.faceLandmarks && results.faceLandmarks.length > 0) {
             const landmarks = results.faceLandmarks[0];
 
-            // --- BRANCH A: GLASSES TRACKING ---
-            if (props.mode === 'glasses' && glassesMesh) {
-                // Primary tracking points (MediaPipe index mapping)
-                const nose = landmarks?.[168];     // Mid-nose bridge
-                const leftTemple = landmarks?.[234]; // Left outer face
-                const rightTemple = landmarks?.[454]; // Right outer face
+            if (glassesMesh) {
+                const nose = landmarks?.[168];
+                const leftTemple = landmarks?.[234];
+                const rightTemple = landmarks?.[454];
 
                 if (!nose || !leftTemple || !rightTemple) return;
 
-                // Frustum Math: Convert 0-1 normalized coordinates to 3D world space
                 const dist = camera.position.z;
                 const vFov = camera.fov * (Math.PI / 180);
                 const visibleHeight = 2 * Math.tan(vFov / 2) * dist;
                 const visibleWidth = visibleHeight * camera.aspect;
 
-                // Map nose bridge to X/Y world coords
                 const xWorld = (nose.x - 0.5) * visibleWidth;
                 const yWorld = -(nose.y - 0.5) * visibleHeight;
                 targetObj.position.set(xWorld, yWorld, 0);
 
-                // Calculate distances for Scale & Rotation
-                const dx = leftTemple.x - rightTemple.x;
-                const dy = leftTemple.y - rightTemple.y;
-                const dz = leftTemple.z - rightTemple.z;
+                // Contact Lens positioning
+                if ((glassesMesh as any)?.userData?.isImageLenses && props.mode === 'contacts') {
+                    const leftIris = landmarks?.[468];
+                    const rightIris = landmarks?.[473];
+                    const leftMesh = (glassesMesh as any).userData.leftMesh as THREE.Mesh;
+                    const rightMesh = (glassesMesh as any).userData.rightMesh as THREE.Mesh;
 
-                // --- SCALE LOGIC ---
-                // Math.hypot gets the absolute distance between temples
-                const faceWidthNormalized = Math.hypot(dx, dy);
-                const faceWidthWorld = faceWidthNormalized * visibleWidth;
+                    if (leftIris && rightIris && leftMesh && rightMesh) {
+                        const lx = (leftIris.x - 0.5) * visibleWidth;
+                        const ly = -(leftIris.y - 0.5) * visibleHeight;
+                        const rx = (rightIris.x - 0.5) * visibleWidth;
+                        const ry = -(rightIris.y - 0.5) * visibleHeight;
 
-                // 0.15 is the standard width of the GLB model in meters
-                const exactScale = (faceWidthWorld / 0.15) * 1.15;
-                targetObj.scale.set(exactScale, exactScale, exactScale);
+                        leftMesh.position.lerp(new THREE.Vector3(lx, ly, 0), 0.4);
+                        rightMesh.position.lerp(new THREE.Vector3(rx, ry, 0), 0.4);
 
-                // --- ROTATION LOGIC ---
-                // safeDx/Dy: We normalize for Mirror Mode to prevent the glasses 
-                // from flipping upside down when the face mirrors.
-                const safeDx = Math.abs(dx);
-                const safeDy = dx < 0 ? -dy : dy;
+                        const dx = leftIris.x - rightIris.x;
+                        const faceWidthNormalized = Math.abs(dx);
 
-                // DOUBLE-NEGATIVE MASTERSTROKE: Inverting both Z and Y rotation 
-                // forces the glasses to match the mirrored webcam feed perfectly.
-                const rollAngle = -Math.atan2(safeDy, safeDx); // Tilt (Roll)
-                const yawAngle = -Math.atan2(dz, safeDx);    // Pan (Yaw)
+                        // Increase multiplier so overlays scale larger relative to eye separation
+                        const scaleFactor = Math.max(0.9, faceWidthNormalized * 3.0);
+                        leftMesh.scale.lerp(new THREE.Vector3(scaleFactor, scaleFactor, scaleFactor), 0.5);
+                        rightMesh.scale.lerp(new THREE.Vector3(scaleFactor, scaleFactor, scaleFactor), 0.5);
+                    }
+                } else {
+                    const dx = leftTemple.x - rightTemple.x;
+                    const dy = leftTemple.y - rightTemple.y;
+                    const dz = leftTemple.z - rightTemple.z;
 
-                targetObj.rotation.z = rollAngle;
-                targetObj.rotation.y = yawAngle;
-            } 
-            
-            // --- BRANCH B: CONTACTS TRACKING (WIP) ---
-            else if (props.mode === 'contacts') {
-                // (TODO) Ready for Iris tracking points 473 and 468
+                    const faceWidthNormalized = Math.hypot(dx, dy);
+                    const faceWidthWorld = faceWidthNormalized * visibleWidth;
+
+                    const exactScale = (faceWidthWorld / 0.15) * 1.15;
+                    targetObj.scale.set(exactScale, exactScale, exactScale);
+
+                    const safeDx = Math.abs(dx);
+                    const safeDy = dx < 0 ? -dy : dy;
+
+                    const rollAngle = -Math.atan2(safeDy, safeDx);
+                    const yawAngle = -Math.atan2(dz, safeDx);
+
+                    targetObj.rotation.z = rollAngle;
+                    targetObj.rotation.y = yawAngle;
+                }
             }
         } else if (glassesMesh) {
-            // Hide glasses if no face is in view
             targetObj.position.set(0, 9999, 0);
         }
     }
 
-    /** * LERP (Linear Interpolation) 
-     * Glide the mesh 20% toward the target object every frame for smoothness.
-     */
-    if (glassesMesh && props.mode === 'glasses') {
+    if (glassesMesh && !((glassesMesh as any).userData?.isImageLenses && props.mode === 'contacts')) {
         glassesMesh.position.lerp(targetObj.position, 0.2);
         glassesMesh.quaternion.slerp(targetObj.quaternion, 0.2);
         glassesMesh.scale.lerp(targetObj.scale, 0.2);
@@ -301,8 +327,6 @@ function renderLoop() {
     }
 }
 
-/** * Syncs the WebGL viewport with the container size on browser window resize.
- */
 function handleResize() {
     if (!canvasEl.value || !camera || !renderer) return;
     const container = canvasEl.value.parentElement;
@@ -322,15 +346,6 @@ function handleResize() {
         :style="containerStyle"
         class="relative w-full max-w-4xl mx-auto bg-neutral-900 overflow-hidden shadow-lg rounded-xl"
     >
-        <div 
-            v-if="props.mode === 'contacts'"
-            class="absolute inset-0 z-20 flex items-center justify-center bg-black/60 backdrop-blur-md"
-        >
-            <h2 class="text-3xl font-bold text-white tracking-widest uppercase shadow-black drop-shadow-lg">
-                Work in Progress
-            </h2>
-        </div>
-
         <video
             ref="videoEl"
             class="absolute inset-0 w-full h-full z-0"
