@@ -16,6 +16,8 @@ const models = ref([
     { name: 'EO Mangekyou Itachi', value: 'lens1.png', image: '/lens1.png', type: 'contacts' },
     { name: 'EO Eyewear Dell', value: 'classic_nerd_black', image: '/1stglasses.png', type: 'glasses' },
     { name: 'EO Rect Metal (Silver)', value: 'rect_metal_silver', image: '/2ndglasses.png', type: 'glasses' },
+    { name: 'EO Olive Glasses', value: 'aviator_wireframe_olive', image: '/3rdglasses.png', type: 'glasses' },
+    { name: 'EO Orange Sunglasses', value: 'classic_orange_sunglasses', image: '/4thglasses.png', type: 'glasses' },
 ]);
 const selectedModel = ref('classic_nerd_black');
 
