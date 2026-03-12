@@ -251,6 +251,10 @@ function renderLoop() {
             const landmarks = results.faceLandmarks[0];
 
             if (glassesMesh) {
+                // Ensure image-based contact lenses reappear when a face is detected
+                if ((glassesMesh as any).userData?.isImageLenses && props.mode === 'contacts') {
+                    glassesMesh.visible = true;
+                }
                 const nose = landmarks?.[168];
                 const leftTemple = landmarks?.[234];
                 const rightTemple = landmarks?.[454];
@@ -312,7 +316,13 @@ function renderLoop() {
                 }
             }
         } else if (glassesMesh) {
-            targetObj.position.set(0, 9999, 0);
+            // If no face is detected, hide image-based contact lenses so they don't
+            // remain at the last seen position.
+            if ((glassesMesh as any).userData?.isImageLenses && props.mode === 'contacts') {
+                glassesMesh.visible = false;
+            } else {
+                targetObj.position.set(0, 9999, 0);
+            }
         }
     }
 
