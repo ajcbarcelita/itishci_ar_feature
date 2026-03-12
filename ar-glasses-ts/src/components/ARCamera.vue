@@ -173,8 +173,8 @@ async function loadGlassesModel(modelName: string) {
                     const isContacts = props.mode === 'contacts';
                     
                     // Make contact planes larger for better coverage
-                    const planeW = isContacts ? 0.06 : 0.35;
-                    const planeH = isContacts ? 0.06 : 0.35;
+                    const planeW = isContacts ? 0.08 : 0.35;
+                    const planeH = isContacts ? 0.08 : 0.35;
                     const geom = new THREE.PlaneGeometry(planeW, planeH);
 
                     const matL = new THREE.MeshBasicMaterial({ map: texture, transparent: true });
