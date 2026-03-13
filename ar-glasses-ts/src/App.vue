@@ -4,6 +4,7 @@ import ARCamera from './components/ARCamera.vue';
 import Navbar from './components/Navbar.vue';
 import Footer from './components/Footer.vue';
 import PreviewCarousel from './components/PreviewCarousel.vue';
+import Onboarding from './components/Onboarding.vue';
 
 import { SelectButton } from 'primevue';
 
@@ -22,6 +23,14 @@ const models = ref([
     { name: 'EO Fuchsia Lens', value: 'lens3.png', image: '/lens3.png', type: 'contacts' },
 ]);
 const selectedModel = ref('classic_nerd_black');
+
+// Onboarding visibility (persisted)
+const showOnboarding = ref<boolean>(!localStorage.getItem('seenOnboarding'));
+
+function onOnboardingClose(payload: { dontAskAgain: boolean }) {
+    if (payload.dontAskAgain) localStorage.setItem('seenOnboarding', '1');
+    showOnboarding.value = false;
+}
 
 // Show only PNG lens items when in `contacts` mode
 const displayedModels = computed(() => {
@@ -70,6 +79,16 @@ watch(currentMode, (mode, oldMode) => {
             </div>
 
             <ARCamera :mode="currentMode" :model="selectedModel" />
+
+            <button
+                aria-label="Open help"
+                @click="showOnboarding = true"
+                class="fixed top-6 right-6 z-30 bg-white rounded-full p-3 shadow-lg"
+            >
+                ?
+            </button>
+
+            <Onboarding v-if="showOnboarding" @close="onOnboardingClose" />
             
         </main>
 

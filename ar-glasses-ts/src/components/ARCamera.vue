@@ -4,9 +4,6 @@ import { FaceLandmarker, FilesetResolver } from '@mediapipe/tasks-vision';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
-/**
- * COMPONENT PROPS
- */
 const props = defineProps<{
     mode: string,
     model?: string,
@@ -173,8 +170,8 @@ async function loadGlassesModel(modelName: string) {
                     const isContacts = props.mode === 'contacts';
                     
                     // Make contact planes larger for better coverage
-                    const planeW = isContacts ? 0.08 : 0.35;
-                    const planeH = isContacts ? 0.08 : 0.35;
+                    const planeW = isContacts ? 0.075 : 0.35;
+                    const planeH = isContacts ? 0.075 : 0.35;
                     const geom = new THREE.PlaneGeometry(planeW, planeH);
 
                     const matL = new THREE.MeshBasicMaterial({ map: texture, transparent: true });
