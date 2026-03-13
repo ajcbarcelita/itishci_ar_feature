@@ -78,5 +78,5 @@ watch(currentMode, (mode, oldMode) => {
 </template>
 
 <style scoped>
-    
+ 
 </style>
