@@ -9,7 +9,7 @@ const props = defineProps<{
     model?: string,
 }>();
 
-// --- 1. DOM Refs & UI State ---
+// --- 1. DOM Refs & UI  State ---
 const videoEl = ref<HTMLVideoElement | null>(null);
 const canvasEl = ref<HTMLCanvasElement | null>(null);
 const isLoading = ref(true);
@@ -22,6 +22,9 @@ let camera: THREE.PerspectiveCamera;
 let renderer: THREE.WebGLRenderer;
 let glassesMesh: THREE.Group | null = null;
 let animationFrameId: number;
+
+// Lower opacity makes contact textures blend with the real iris instead of looking like stickers.
+const CONTACT_LENS_OPACITY = 0.38;
 
 /** targetObj: An invisible 3D anchor used to hold raw ML coordinates */
 const targetObj = new THREE.Object3D();
@@ -170,15 +173,23 @@ async function loadGlassesModel(modelName: string) {
                     const isContacts = props.mode === 'contacts';
                     
                     // Make contact planes larger for better coverage
-                    const planeW = isContacts ? 0.075 : 0.35;
-                    const planeH = isContacts ? 0.075 : 0.35;
+                    const planeW = isContacts ? 0.079 : 0.35;
+                    const planeH = isContacts ? 0.079 : 0.35;
                     const geom = new THREE.PlaneGeometry(planeW, planeH);
 
-                    const matL = new THREE.MeshBasicMaterial({ map: texture, transparent: true });
+                    const contactMaterialOptions: THREE.MeshBasicMaterialParameters = {
+                        map: texture,
+                        transparent: true,
+                        opacity: isContacts ? CONTACT_LENS_OPACITY : 1,
+                        alphaTest: isContacts ? 0.02 : 0,
+                        depthWrite: !isContacts,
+                    };
+
+                    const matL = new THREE.MeshBasicMaterial(contactMaterialOptions);
                     const left = new THREE.Mesh(geom, matL);
                     left.position.set(isContacts ? 0 : -0.045, 0, 0); // Adjusted spacing for larger lenses
 
-                    const matR = new THREE.MeshBasicMaterial({ map: texture, transparent: true });
+                    const matR = new THREE.MeshBasicMaterial(contactMaterialOptions);
                     const right = new THREE.Mesh(geom, matR);
                     right.position.set(isContacts ? 0 : 0.045, 0, 0); // Adjusted spacing for larger lenses
 
