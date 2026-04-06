@@ -21,6 +21,7 @@ const models = ref([
     { name: 'EO Orange Sunglasses', value: 'classic_orange_sunglasses', image: '/4thglasses.png', type: 'glasses' },
     { name: 'EO Aqua Lens', value: 'lens2.png', image: '/lens2.png', type: 'contacts' },
     { name: 'EO Fuchsia Lens', value: 'lens3.png', image: '/lens3.png', type: 'contacts' },
+    { name: 'EO Grey Lens', value: 'lens4.png', image: '/lens4.png', type: 'contacts' },
 ]);
 const selectedModel = ref('classic_nerd_black');
 

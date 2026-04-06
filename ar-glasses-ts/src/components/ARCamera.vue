@@ -9,7 +9,7 @@ const props = defineProps<{
     model?: string,
 }>();
 
-// --- 1. DOM Refs & UI  State ---
+// --- 1. DOM Refs & UI State ---
 const videoEl = ref<HTMLVideoElement | null>(null);
 const canvasEl = ref<HTMLCanvasElement | null>(null);
 const isLoading = ref(true);
@@ -23,8 +23,29 @@ let renderer: THREE.WebGLRenderer;
 let glassesMesh: THREE.Group | null = null;
 let animationFrameId: number;
 
-// Lower opacity makes contact textures blend with the real iris instead of looking like stickers.
-const CONTACT_LENS_OPACITY = 0.38;
+const CONTACT_LENS_OPACITY = 0.35;
+
+/**
+ * EAR (Eye Aspect Ratio) threshold — below this value the eye is considered closed.
+ * Tune between 0.15–0.22 depending on how sensitive you want it.
+ */
+const EAR_THRESHOLD = 0.18;
+
+/**
+ * Smooth the EAR value over time so rapid blinks don't cause flicker.
+ * 0 = no smoothing, 1 = never changes. 0.35 is a good balance.
+ */
+const EAR_SMOOTHING = 0.35;
+let smoothedLeftEAR = 0.3;
+let smoothedRightEAR = 0.3;
+
+/**
+ * Per-eye opacity targets — lenses fade in/out instead of popping.
+ * This makes blinking look much more natural.
+ */
+let leftLensOpacity = CONTACT_LENS_OPACITY;
+let rightLensOpacity = CONTACT_LENS_OPACITY;
+const OPACITY_FADE_SPEED = 0.18; 
 
 /** targetObj: An invisible 3D anchor used to hold raw ML coordinates */
 const targetObj = new THREE.Object3D();
@@ -171,10 +192,9 @@ async function loadGlassesModel(modelName: string) {
                     const group = new THREE.Group();
 
                     const isContacts = props.mode === 'contacts';
-                    
-                    // Make contact planes larger for better coverage
-                    const planeW = isContacts ? 0.079 : 0.35;
-                    const planeH = isContacts ? 0.079 : 0.35;
+
+                    const planeW = isContacts ? 0.077 : 0.35;
+                    const planeH = isContacts ? 0.077 : 0.35;
                     const geom = new THREE.PlaneGeometry(planeW, planeH);
 
                     const contactMaterialOptions: THREE.MeshBasicMaterialParameters = {
@@ -187,11 +207,11 @@ async function loadGlassesModel(modelName: string) {
 
                     const matL = new THREE.MeshBasicMaterial(contactMaterialOptions);
                     const left = new THREE.Mesh(geom, matL);
-                    left.position.set(isContacts ? 0 : -0.045, 0, 0); // Adjusted spacing for larger lenses
+                    left.position.set(isContacts ? 0 : -0.045, 0, 0);
 
                     const matR = new THREE.MeshBasicMaterial(contactMaterialOptions);
                     const right = new THREE.Mesh(geom, matR);
-                    right.position.set(isContacts ? 0 : 0.045, 0, 0); // Adjusted spacing for larger lenses
+                    right.position.set(isContacts ? 0 : 0.045, 0, 0);
 
                     group.add(left);
                     group.add(right);
@@ -242,7 +262,46 @@ async function loadGlassesModel(modelName: string) {
     });
 }
 
-// --- 5. Render & Tracking Loop ---
+// --- 5. EAR Helper ---
+
+/**
+ * Computes Eye Aspect Ratio for one eye.
+ *
+ * Uses 6 landmark points arranged as:
+ *
+ *        p2  p3
+ *   p1            p4
+ *        p6  p5
+ *
+ * EAR = (|p2-p6| + |p3-p5|) / (2 * |p1-p4|)
+ *
+ * When the eye is open, EAR ≈ 0.25–0.35.
+ * When closed, EAR drops below ~0.18.
+ *
+ */
+function computeEAR(
+    landmarks: { x: number; y: number; z: number }[],
+    p1i: number, p2i: number, p3i: number,
+    p4i: number, p5i: number, p6i: number,
+): number {
+    const p1 = landmarks[p1i];
+    const p2 = landmarks[p2i];
+    const p3 = landmarks[p3i];
+    const p4 = landmarks[p4i];
+    const p5 = landmarks[p5i];
+    const p6 = landmarks[p6i];
+
+    if (!p1 || !p2 || !p3 || !p4 || !p5 || !p6) return 0.3; // default open
+
+    const v1 = Math.hypot(p2.x - p6.x, p2.y - p6.y);
+    const v2 = Math.hypot(p3.x - p5.x, p3.y - p5.y);
+    const h  = Math.hypot(p1.x - p4.x, p1.y - p4.y);
+
+    if (h < 1e-6) return 0.3;
+    return (v1 + v2) / (2.0 * h);
+}
+
+// --- 6. Render & Tracking Loop ---
 
 let lastVideoTime = -1;
 
@@ -259,10 +318,10 @@ function renderLoop() {
             const landmarks = results.faceLandmarks[0];
 
             if (glassesMesh) {
-                // Ensure image-based contact lenses reappear when a face is detected
                 if ((glassesMesh as any).userData?.isImageLenses && props.mode === 'contacts') {
                     glassesMesh.visible = true;
                 }
+
                 const nose = landmarks?.[168];
                 const leftTemple = landmarks?.[234];
                 const rightTemple = landmarks?.[454];
@@ -280,12 +339,13 @@ function renderLoop() {
 
                 // Contact Lens positioning
                 if ((glassesMesh as any)?.userData?.isImageLenses && props.mode === 'contacts') {
-                    const leftIris = landmarks?.[468];
+                    const leftIris  = landmarks?.[468];
                     const rightIris = landmarks?.[473];
-                    const leftMesh = (glassesMesh as any).userData.leftMesh as THREE.Mesh;
+                    const leftMesh  = (glassesMesh as any).userData.leftMesh  as THREE.Mesh;
                     const rightMesh = (glassesMesh as any).userData.rightMesh as THREE.Mesh;
 
                     if (leftIris && rightIris && leftMesh && rightMesh) {
+                        // --- Position ---
                         const lx = (leftIris.x - 0.5) * visibleWidth;
                         const ly = -(leftIris.y - 0.5) * visibleHeight;
                         const rx = (rightIris.x - 0.5) * visibleWidth;
@@ -294,13 +354,35 @@ function renderLoop() {
                         leftMesh.position.lerp(new THREE.Vector3(lx, ly, 0), 0.4);
                         rightMesh.position.lerp(new THREE.Vector3(rx, ry, 0), 0.4);
 
+                        // --- Scale ---
                         const dx = leftIris.x - rightIris.x;
                         const faceWidthNormalized = Math.abs(dx);
-
-                        // Increase multiplier so overlays scale larger relative to eye separation
                         const scaleFactor = Math.max(0.9, faceWidthNormalized * 3.0);
                         leftMesh.scale.lerp(new THREE.Vector3(scaleFactor, scaleFactor, scaleFactor), 0.5);
                         rightMesh.scale.lerp(new THREE.Vector3(scaleFactor, scaleFactor, scaleFactor), 0.5);
+
+                        // --- EAR: detect eye open/closed per eye ---
+                        // Left eye landmarks:  p1=33, p2=160, p3=158, p4=133, p5=153, p6=144
+                        // Right eye landmarks: p1=362, p2=385, p3=387, p4=263, p5=373, p6=380
+                        const rawLeftEAR  = computeEAR(landmarks,  33, 160, 158, 133, 153, 144);
+                        const rawRightEAR = computeEAR(landmarks, 362, 385, 387, 263, 373, 380);
+
+                        // Smooth EAR so micro-jitter doesn't cause flicker
+                        smoothedLeftEAR  = smoothedLeftEAR  * EAR_SMOOTHING + rawLeftEAR  * (1 - EAR_SMOOTHING);
+                        smoothedRightEAR = smoothedRightEAR * EAR_SMOOTHING + rawRightEAR * (1 - EAR_SMOOTHING);
+
+                        const leftTarget  = smoothedLeftEAR  > EAR_THRESHOLD ? CONTACT_LENS_OPACITY : 0;
+                        const rightTarget = smoothedRightEAR > EAR_THRESHOLD ? CONTACT_LENS_OPACITY : 0;
+
+                        leftLensOpacity  += (leftTarget  - leftLensOpacity)  * OPACITY_FADE_SPEED;
+                        rightLensOpacity += (rightTarget - rightLensOpacity) * OPACITY_FADE_SPEED;
+
+                        // Apply opacity — also hide mesh entirely when fully transparent
+                        // to avoid any residual rendering cost
+                        (leftMesh.material  as THREE.MeshBasicMaterial).opacity = leftLensOpacity;
+                        (rightMesh.material as THREE.MeshBasicMaterial).opacity = rightLensOpacity;
+                        leftMesh.visible  = leftLensOpacity  > 0.01;
+                        rightMesh.visible = rightLensOpacity > 0.01;
                     }
                 } else {
                     const dx = leftTemple.x - rightTemple.x;
@@ -317,17 +399,28 @@ function renderLoop() {
                     const safeDy = dx < 0 ? -dy : dy;
 
                     const rollAngle = -Math.atan2(safeDy, safeDx);
-                    const yawAngle = -Math.atan2(dz, safeDx);
+                    const yawAngle  = -Math.atan2(dz, safeDx);
 
                     targetObj.rotation.z = rollAngle;
                     targetObj.rotation.y = yawAngle;
                 }
             }
         } else if (glassesMesh) {
-            // If no face is detected, hide image-based contact lenses so they don't
-            // remain at the last seen position.
             if ((glassesMesh as any).userData?.isImageLenses && props.mode === 'contacts') {
-                glassesMesh.visible = false;
+                // Fade out both lenses when face is lost
+                leftLensOpacity  *= (1 - OPACITY_FADE_SPEED);
+                rightLensOpacity *= (1 - OPACITY_FADE_SPEED);
+
+                const leftMesh  = (glassesMesh as any).userData.leftMesh  as THREE.Mesh;
+                const rightMesh = (glassesMesh as any).userData.rightMesh as THREE.Mesh;
+                (leftMesh.material  as THREE.MeshBasicMaterial).opacity = leftLensOpacity;
+                (rightMesh.material as THREE.MeshBasicMaterial).opacity = rightLensOpacity;
+                leftMesh.visible  = leftLensOpacity  > 0.01;
+                rightMesh.visible = rightLensOpacity > 0.01;
+
+                if (leftLensOpacity <= 0.01 && rightLensOpacity <= 0.01) {
+                    glassesMesh.visible = false;
+                }
             } else {
                 targetObj.position.set(0, 9999, 0);
             }
